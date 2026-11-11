@@ -67,6 +67,10 @@ private:
     void recordMessage(const std::string& topic, const std::string& content,
                        const std::string& publisher, std::size_t delivered);
 
+    bool createManagedNode(const std::string& name, const std::string& topic, bool asPublisher);
+    bool publishOnTopic(const std::string& topic, const std::string& content);
+    void runExceptionCase(int index);
+
     void onCreateNode();
     void onRemoveNode();
     void onShutdownAll();
@@ -77,6 +81,11 @@ private:
     void onLogLevelChanged();
     void onExportCsv();
     void onResendSelected();
+
+    // ---- 自动演示：由定时器逐步推进，界面始终保持响应 ----
+    void startAutoDemo();
+    void stopAutoDemo();
+    void runAutoDemoStep(int step);
 
     HWND createChild(const wchar_t* className, const wchar_t* text, DWORD style, DWORD exStyle,
                      int x, int y, int width, int height, int id);
@@ -92,6 +101,7 @@ private:
     HWND logEdit_ = nullptr;
     HWND topicsCombo_ = nullptr;
     HWND logLevelCombo_ = nullptr;
+    HWND autoDemoButton_ = nullptr;
     bool richEdit_ = false;
 
     HFONT uiFont_ = nullptr;
@@ -102,6 +112,8 @@ private:
     std::vector<MessageRecord> messages_;
     int messageSeq_ = 0;
     int publishSeed_ = 0;
+    bool autoDemoRunning_ = false;
+    int autoDemoStep_ = 0;
     std::wstring statusText_;
     int dpi_ = 96;
 };

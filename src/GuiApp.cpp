@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <string>
 #include <utility>
@@ -39,6 +40,11 @@ constexpr COLORREF kWarnColor = RGB(176, 102, 0);
 constexpr COLORREF kErrorColor = RGB(190, 40, 40);
 constexpr COLORREF kPlainColor = RGB(60, 60, 60);
 
+// 自动演示：每 600ms 推进一步，共 17 步（0~16）
+constexpr UINT_PTR kTimerAutoDemo = 1;
+constexpr UINT kAutoDemoStepMs = 600;
+constexpr int kAutoDemoSteps = 17;
+
 enum ControlId : int {
     kIdNodeList = 101,
     kIdRemoveNode = 102,
@@ -56,6 +62,7 @@ enum ControlId : int {
     kIdLabButton = 402,
     kIdLogLevel = 403,
     kIdExportButton = 404,
+    kIdAutoDemoButton = 405,
     kIdLogEdit = 501,
     kIdMessageList = 601,
 };
@@ -100,6 +107,15 @@ void addColumn(HWND list, int index, const wchar_t* title, int width) {
 
 void setItemText(HWND list, int row, int column, const std::wstring& text) {
     ListView_SetItemText(list, row, column, const_cast<wchar_t*>(text.c_str()));
+}
+
+/// 执行一段“故意出错”的操作，捕获并记录异常（异常实验室与自动演示共用）
+void guardedCase(const std::function<void()>& body) {
+    try {
+        body();
+    } catch (const RosException& error) {
+        Logger::error("实验", std::string("已捕获 ") + error.what());
+    }
 }
 
 } // namespace
@@ -223,6 +239,7 @@ LRESULT GuiApp::windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpar
                     case kIdDemoButton: onRunDemo(); return 0;
                     case kIdLabButton: onExceptionLab(); return 0;
                     case kIdExportButton: onExportCsv(); return 0;
+                    case kIdAutoDemoButton: startAutoDemo(); return 0;
                     default: break;
                 }
             }
@@ -241,6 +258,17 @@ LRESULT GuiApp::windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpar
             }
             break;
         }
+
+        case WM_TIMER:
+            if (wparam == kTimerAutoDemo) {
+                if (autoDemoRunning_) {
+                    runAutoDemoStep(autoDemoStep_++);
+                } else {
+                    KillTimer(window, kTimerAutoDemo);
+                }
+                return 0;
+            }
+            break;
 
         case WM_ERASEBKGND:
             return 1;
@@ -264,6 +292,7 @@ LRESULT GuiApp::windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         }
 
         case WM_DESTROY:
+            KillTimer(window, kTimerAutoDemo);
             Logger::setSink(nullptr);
             PostQuitMessage(0);
             return 0;
@@ -331,18 +360,20 @@ void GuiApp::createControls() {
 
     // ---- 右下：演示与工具 ----
     createChild(L"BUTTON", L" 演示与工具", BS_GROUPBOX, 0, 332, 310, 652, 92, 0);
-    createChild(L"BUTTON", L"运行内置演示", BS_PUSHBUTTON, 0, 348, 330, 130, 30, kIdDemoButton);
-    createChild(L"BUTTON", L"异常实验室", BS_PUSHBUTTON, 0, 486, 330, 120, 30, kIdLabButton);
-    createChild(L"BUTTON", L"导出 CSV", BS_PUSHBUTTON, 0, 614, 330, 96, 30, kIdExportButton);
-    createChild(L"STATIC", L"日志级别", SS_LEFT, 0, 722, 336, 66, 22, 0);
+    autoDemoButton_ = createChild(L"BUTTON", L"自动演示", BS_PUSHBUTTON, 0,
+                                  348, 330, 110, 30, kIdAutoDemoButton);
+    createChild(L"BUTTON", L"内置演示", BS_PUSHBUTTON, 0, 466, 330, 100, 30, kIdDemoButton);
+    createChild(L"BUTTON", L"异常实验室", BS_PUSHBUTTON, 0, 574, 330, 110, 30, kIdLabButton);
+    createChild(L"BUTTON", L"导出 CSV", BS_PUSHBUTTON, 0, 692, 330, 90, 30, kIdExportButton);
+    createChild(L"STATIC", L"日志级别", SS_LEFT, 0, 792, 336, 58, 22, 0);
     logLevelCombo_ = createChild(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                 0, 790, 330, 110, 160, kIdLogLevel);
+                                 0, 852, 330, 110, 160, kIdLogLevel);
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"INFO"));
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"WARN"));
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"ERROR"));
     SendMessageW(logLevelCombo_, CB_SETCURSEL, 0, 0);
-    createChild(L"STATIC", L"提示：双击“消息记录”中的任意一行，可原样重发该条消息。", SS_LEFT,
-                0, 348, 370, 620, 22, 0);
+    createChild(L"STATIC", L"提示：“自动演示”会依次创建 5 个节点、发布 3 条消息并触发 6 种异常；双击消息记录可重发。",
+                SS_LEFT, 0, 348, 370, 620, 22, 0);
 
     // ---- 消息记录 ----
     createChild(L"BUTTON", L" 消息记录（双击某行可重发）", BS_GROUPBOX, 0, 16, 410, 968, 200, 0);
@@ -638,22 +669,8 @@ void GuiApp::onCreateNode() {
     const bool asPublisher =
         SendMessageW(control(kIdRadioPublisher), BM_GETCHECK, 0, 0) == BST_CHECKED;
 
-    try {
-        if (asPublisher) {
-            auto publisher = std::make_unique<Publisher>(name, topic);
-            publisher->init();
-            nodes_.push_back(ManagedNode{std::move(publisher), "发布者", topic});
-        } else {
-            auto subscriber = std::make_unique<Subscriber>(name, topic);
-            subscriber->init();
-            nodes_.push_back(ManagedNode{std::move(subscriber), "订阅者", topic});
-        }
+    if (createManagedNode(name, topic, asPublisher)) {
         setText(control(kIdNameEdit), std::string());
-        refreshNodeList();
-        refreshTopics();
-        refreshStatus();
-    } catch (const RosException& error) {
-        Logger::error("GUI", error.what());
     }
 }
 
@@ -693,39 +710,7 @@ void GuiApp::onShutdownAll() {
 }
 
 void GuiApp::onPublish() {
-    const std::string topic = textOf(topicsCombo_);
-    if (topic.empty()) {
-        Logger::warn("GUI", "还没有任何话题：请先创建一个发布者");
-        return;
-    }
-    const std::string content = textOf(control(kIdPublishContent));
-    if (content.empty()) {
-        Logger::warn("GUI", "消息内容为空，已取消发布");
-        return;
-    }
-
-    Publisher* publisher = nullptr;
-    for (auto& managed : nodes_) {
-        if (managed.kind == "发布者" && managed.topic == topic) {
-            publisher = dynamic_cast<Publisher*>(managed.node.get());
-            break;
-        }
-    }
-    if (publisher == nullptr) {
-        Logger::error("GUI", "话题 \"" + topic + "\" 上没有发布者，无法发布");
-        return;
-    }
-
-    const std::size_t delivered = ROS::instance().subscriberCount(topic);
-    try {
-        publisher->publish(content);
-        recordMessage(topic, content, publisher->name(), delivered);
-        refreshNodeList();   // 更新订阅者的“收到”计数
-        refreshStatus();
-    } catch (const RosException& error) {
-        Logger::error("GUI", error.what());
-        Logger::info("GUI", "提示：该话题还没有订阅者，先创建一个订阅者再发布。");
-    }
+    publishOnTopic(textOf(topicsCombo_), textOf(control(kIdPublishContent)));
 }
 
 void GuiApp::onRandomPublish() {
@@ -810,66 +795,243 @@ void GuiApp::onRunDemo() {
     refreshStatus();
 }
 
+void GuiApp::runExceptionCase(int index) {
+    static const char* const kTitles[] = {
+        "空节点名（EX-01）",
+        "空话题名（EX-05）",
+        "重复节点名注册（EX-02）",
+        "空消息内容（EX-03）",
+        "向不存在的话题发布（EX-04）",
+        "关闭后继续发布（EX-06）",
+    };
+    if (index < 0 || index >= 6) {
+        return;
+    }
+    Logger::info("实验", std::string("触发非法操作：") + kTitles[index]);
+
+    switch (index) {
+        case 0:
+            guardedCase([] {
+                const Publisher bad("", "sensor");
+                (void)bad;
+            });
+            break;
+        case 1:
+            guardedCase([] {
+                const Publisher bad("lab_bad_topic", "   ");
+                (void)bad;
+            });
+            break;
+        case 2:
+            guardedCase([] {
+                Publisher first("lab_dup", "sensor");
+                Publisher second("lab_dup", "sensor");
+                first.init();
+                second.init();
+            });
+            break;
+        case 3:
+            guardedCase([] {
+                Publisher publisher("lab_empty_pub", "sensor");
+                Subscriber subscriber("lab_empty_sub", "sensor");
+                publisher.init();
+                subscriber.init();
+                publisher.publish("   ");
+            });
+            break;
+        case 4:
+            guardedCase([] {
+                Publisher publisher("lab_ghost_pub", "ghost_topic");
+                publisher.init();
+                publisher.publish("temperature=20.0");
+            });
+            break;
+        default:
+            guardedCase([] {
+                Publisher publisher("lab_closed_pub", "sensor");
+                Subscriber subscriber("lab_closed_sub", "sensor");
+                publisher.init();
+                subscriber.init();
+                publisher.publish("temperature=20.0");
+                ROS::instance().shutdownAll();
+                publisher.publish("temperature=21.0");
+            });
+            break;
+    }
+}
+
 void GuiApp::onExceptionLab() {
     Logger::info("实验", "===== 异常实验室：逐个触发非法操作，观察是否被捕获 =====");
-
-    try {
-        const Publisher bad("", "sensor");
-        (void)bad;
-    } catch (const RosException& error) {
-        Logger::error("实验", std::string("已捕获 ") + error.what());
+    for (int index = 0; index < 6; ++index) {
+        runExceptionCase(index);
     }
-
-    try {
-        const Publisher bad("lab_bad_topic", "   ");
-        (void)bad;
-    } catch (const RosException& error) {
-        Logger::error("实验", std::string("已捕获 ") + error.what());
-    }
-
-    try {
-        Publisher first("lab_dup", "sensor");
-        Publisher second("lab_dup", "sensor");
-        first.init();
-        second.init();
-    } catch (const RosException& error) {
-        Logger::error("实验", std::string("已捕获 ") + error.what());
-    }
-
-    try {
-        Publisher publisher("lab_empty_pub", "sensor");
-        Subscriber subscriber("lab_empty_sub", "sensor");
-        publisher.init();
-        subscriber.init();
-        publisher.publish("   ");
-    } catch (const RosException& error) {
-        Logger::error("实验", std::string("已捕获 ") + error.what());
-    }
-
-    try {
-        Publisher publisher("lab_ghost_pub", "ghost_topic");
-        publisher.init();
-        publisher.publish("temperature=20.0");
-    } catch (const RosException& error) {
-        Logger::error("实验", std::string("已捕获 ") + error.what());
-    }
-
-    try {
-        Publisher publisher("lab_closed_pub", "sensor");
-        Subscriber subscriber("lab_closed_sub", "sensor");
-        publisher.init();
-        subscriber.init();
-        publisher.publish("temperature=20.0");
-        ROS::instance().shutdownAll();
-        publisher.publish("temperature=21.0");
-    } catch (const RosException& error) {
-        Logger::error("实验", std::string("已捕获 ") + error.what());
-    }
-
     Logger::info("实验", "===== 6 种非法操作全部被捕获，程序仍正常运行 =====");
     refreshNodeList();
     refreshTopics();
     refreshStatus();
+}
+
+bool GuiApp::createManagedNode(const std::string& name, const std::string& topic, bool asPublisher) {
+    try {
+        if (asPublisher) {
+            auto publisher = std::make_unique<Publisher>(name, topic);
+            publisher->init();
+            nodes_.push_back(ManagedNode{std::move(publisher), "发布者", topic});
+        } else {
+            auto subscriber = std::make_unique<Subscriber>(name, topic);
+            subscriber->init();
+            nodes_.push_back(ManagedNode{std::move(subscriber), "订阅者", topic});
+        }
+        refreshNodeList();
+        refreshTopics();
+        refreshStatus();
+        return true;
+    } catch (const RosException& error) {
+        Logger::error("GUI", error.what());
+        return false;
+    }
+}
+
+bool GuiApp::publishOnTopic(const std::string& topic, const std::string& content) {
+    if (topic.empty()) {
+        Logger::warn("GUI", "还没有任何话题：请先创建一个发布者");
+        return false;
+    }
+    if (content.empty()) {
+        Logger::warn("GUI", "消息内容为空，已取消发布");
+        return false;
+    }
+
+    Publisher* publisher = nullptr;
+    for (auto& managed : nodes_) {
+        if (managed.kind == "发布者" && managed.topic == topic) {
+            publisher = dynamic_cast<Publisher*>(managed.node.get());
+            break;
+        }
+    }
+    if (publisher == nullptr) {
+        Logger::error("GUI", "话题 \"" + topic + "\" 上没有发布者，无法发布");
+        return false;
+    }
+
+    const std::size_t delivered = ROS::instance().subscriberCount(topic);
+    try {
+        publisher->publish(content);
+        recordMessage(topic, content, publisher->name(), delivered);
+        refreshNodeList();   // 更新订阅者的“收到”计数
+        refreshStatus();
+        return true;
+    } catch (const RosException& error) {
+        Logger::error("GUI", error.what());
+        Logger::info("GUI", "提示：该话题还没有订阅者，先创建一个订阅者再发布。");
+        return false;
+    }
+}
+
+void GuiApp::startAutoDemo() {
+    if (autoDemoRunning_) {
+        return;
+    }
+
+    if (!nodes_.empty()) {
+        ROS::instance().shutdownAll();
+        nodes_.clear();
+        refreshNodeList();
+        refreshTopics();
+        refreshStatus();
+        Logger::warn("自动演示", "已清空原有节点");
+    }
+
+    autoDemoRunning_ = true;
+    autoDemoStep_ = 0;
+    if (autoDemoButton_ != nullptr) {
+        EnableWindow(autoDemoButton_, FALSE);
+    }
+    Logger::info("自动演示", "开始：创建 5 个节点 → 发布 3 条消息 → 统一关闭 → 触发 6 种异常");
+    SetTimer(window_, kTimerAutoDemo, kAutoDemoStepMs, nullptr);
+}
+
+void GuiApp::stopAutoDemo() {
+    KillTimer(window_, kTimerAutoDemo);
+    autoDemoRunning_ = false;
+    if (autoDemoButton_ != nullptr) {
+        SetWindowTextW(autoDemoButton_, L"自动演示");
+        EnableWindow(autoDemoButton_, TRUE);
+    }
+}
+
+void GuiApp::runAutoDemoStep(int step) {
+    if (!autoDemoRunning_) {
+        return;
+    }
+
+    if (autoDemoButton_ != nullptr && step < kAutoDemoSteps) {
+        wchar_t text[32];
+        std::swprintf(text, 32, L"演示中 %d/%d", step + 1, kAutoDemoSteps);
+        SetWindowTextW(autoDemoButton_, text);
+    }
+
+    switch (step) {
+        case 0:
+            createManagedNode("pub_temp", "sensor", true);
+            break;
+        case 1:
+            createManagedNode("pub_humi", "sensor", true);
+            break;
+        case 2:
+            createManagedNode("sub_a", "sensor", false);
+            break;
+        case 3:
+            createManagedNode("sub_b", "sensor", false);
+            break;
+        case 4:
+            createManagedNode("sub_cmd", "cmd", false);
+            break;
+        case 5:
+            Logger::info("自动演示", "发布第 1 条：temperature=25.3");
+            publishOnTopic("sensor", "temperature=25.3");
+            break;
+        case 6:
+            Logger::info("自动演示", "发布第 2 条：humidity=48 pct");
+            publishOnTopic("sensor", "humidity=48 pct");
+            break;
+        case 7:
+            Logger::info("自动演示", "发布第 3 条：temperature=26.1");
+            publishOnTopic("sensor", "temperature=26.1");
+            break;
+        case 8: {
+            std::size_t cmdCount = 0;
+            for (auto& managed : nodes_) {
+                if (managed.kind != "订阅者") {
+                    continue;
+                }
+                const auto* subscriber = dynamic_cast<Subscriber*>(managed.node.get());
+                if (subscriber != nullptr && subscriber->topic() == "cmd") {
+                    cmdCount = subscriber->receivedCount();
+                }
+            }
+            Logger::info("自动演示", "对照：订阅 cmd 话题的节点收到 " + std::to_string(cmdCount) +
+                                         " 条（该话题没有发布者，验证话题隔离）");
+            break;
+        }
+        case 9:
+            Logger::info("自动演示", "统一关闭全部节点（观察 5 个节点的关闭日志）");
+            onShutdownAll();
+            break;
+        case 10:
+        case 11:
+        case 12:
+        case 13:
+        case 14:
+        case 15:
+            Logger::info("自动演示", "异常用例 " + std::to_string(step - 9) + "/6");
+            runExceptionCase(step - 10);
+            break;
+        default:
+            Logger::info("自动演示", "===== 自动演示结束：3 条消息各送达 2 个订阅者，6 种异常全部被捕获 =====");
+            stopAutoDemo();
+            break;
+    }
 }
 
 void GuiApp::onLogLevelChanged() {
