@@ -46,6 +46,9 @@ public:
     std::size_t subscriberCount(const std::string& topic) const;
     std::size_t nodeCount() const noexcept { return nodes_.size(); }
 
+    /// 返回当前已注册的全部话题（去重并按字典序排序）。
+    std::vector<std::string> topics() const;
+
 private:
     ROS() = default;
 

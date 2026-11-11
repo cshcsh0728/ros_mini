@@ -120,6 +120,21 @@ std::size_t ROS::subscriberCount(const std::string& topic) const {
     return it == subscribers_.end() ? 0 : it->second.size();
 }
 
+std::vector<std::string> ROS::topics() const {
+    std::vector<std::string> result;
+    result.reserve(publishers_.size() + subscribers_.size());
+    for (const auto& entry : publishers_) {
+        result.push_back(entry.first);
+    }
+    for (const auto& entry : subscribers_) {
+        if (std::find(result.begin(), result.end(), entry.first) == result.end()) {
+            result.push_back(entry.first);
+        }
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
 void ROS::ensureUniqueName(const std::string& name) const {
     const auto it = std::find_if(nodes_.begin(), nodes_.end(),
                                  [&name](const Node* node) {

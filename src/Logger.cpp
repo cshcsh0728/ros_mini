@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <utility>
 
 #include "rosmini/Util.h"
 
@@ -9,6 +10,11 @@ namespace rosmini {
 
 LogLevel Logger::minLevel_ = LogLevel::Info;
 std::ofstream Logger::file_;
+std::function<void(const std::string&)> Logger::sink_;
+
+void Logger::setSink(std::function<void(const std::string&)> sink) {
+    sink_ = std::move(sink);
+}
 
 void Logger::setMinLevel(LogLevel level) {
     minLevel_ = level;
@@ -56,6 +62,9 @@ void Logger::write(LogLevel level, const std::string& module, const std::string&
     std::cout << line << std::endl;
     if (file_.is_open()) {
         file_ << line << std::endl;
+    }
+    if (sink_) {
+        sink_(line);
     }
 }
 

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <fstream>
+#include <functional>
 #include <string>
 
 namespace rosmini {
@@ -26,6 +27,13 @@ public:
     static void setLogFile(const std::string& path);
     static void closeLogFile();
 
+    /// 设置额外的日志接收器（图形界面用）。
+    ///
+    /// 每产生一行日志，除了原有的控制台与文件输出外，还会回调该函数。
+    /// 传入空函数对象表示取消接收器。
+    /// 注意：回调在产生日志的线程上同步执行，接收方应避免在回调里再写日志（会递归）。
+    static void setSink(std::function<void(const std::string&)> sink);
+
     static void info(const std::string& module, const std::string& message);
     static void warn(const std::string& module, const std::string& message);
     static void error(const std::string& module, const std::string& message);
@@ -35,6 +43,7 @@ private:
 
     static LogLevel minLevel_;
     static std::ofstream file_;
+    static std::function<void(const std::string&)> sink_;
 };
 
 } // namespace rosmini
