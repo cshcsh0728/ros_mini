@@ -32,3 +32,5 @@ enable_testing()
 add_executable(rosmini_tests tests/test_main.cpp)
 target_link_libraries(rosmini_tests PRIVATE rosmini_core)
 add_test(NAME rosmini_tests COMMAND rosmini_tests)
+
+# Targets: rosmini_core (static library), rosmini_demo (app), rosmini_tests (tests)
