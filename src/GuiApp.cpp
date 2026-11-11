@@ -1,8 +1,12 @@
 ﻿#include "rosmini/GuiApp.h"
 
+#include <commctrl.h>
+#include <richedit.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cwchar>
+#include <fstream>
 #include <iterator>
 #include <string>
 #include <utility>
@@ -16,16 +20,24 @@
 #include "rosmini/Subscriber.h"
 #include "rosmini/Util.h"
 
+#pragma comment(lib, "comctl32.lib")
+
 namespace rosmini {
 namespace {
 
-// ---------- 设计尺寸（以 96 DPI 为基准，运行时按 DPI 缩放） ----------
+// ---------- 设计尺寸（96 DPI 基准，运行时按 DPI 缩放） ----------
 
 constexpr int kDesignWidth = 1000;
-constexpr int kDesignHeight = 700;
+constexpr int kDesignHeight = 890;
 
 constexpr COLORREF kHeaderColor = RGB(30, 41, 66);
 constexpr COLORREF kHeaderTextColor = RGB(255, 255, 255);
+
+// 日志颜色：INFO 蓝、WARN 橙、ERROR 红
+constexpr COLORREF kInfoColor = RGB(28, 84, 150);
+constexpr COLORREF kWarnColor = RGB(176, 102, 0);
+constexpr COLORREF kErrorColor = RGB(190, 40, 40);
+constexpr COLORREF kPlainColor = RGB(60, 60, 60);
 
 enum ControlId : int {
     kIdNodeList = 101,
@@ -43,7 +55,9 @@ enum ControlId : int {
     kIdDemoButton = 401,
     kIdLabButton = 402,
     kIdLogLevel = 403,
+    kIdExportButton = 404,
     kIdLogEdit = 501,
+    kIdMessageList = 601,
 };
 
 std::wstring utf8ToWide(const std::string& text) {
@@ -75,6 +89,19 @@ BOOL CALLBACK applyFontProc(HWND child, LPARAM font) {
     return TRUE;
 }
 
+void addColumn(HWND list, int index, const wchar_t* title, int width) {
+    LVCOLUMNW column{};
+    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+    column.pszText = const_cast<wchar_t*>(title);
+    column.cx = width;
+    column.iSubItem = index;
+    ListView_InsertColumn(list, index, &column);
+}
+
+void setItemText(HWND list, int row, int column, const std::wstring& text) {
+    ListView_SetItemText(list, row, column, const_cast<wchar_t*>(text.c_str()));
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- 生命周期
@@ -96,6 +123,14 @@ GuiApp::~GuiApp() {
 
 int GuiApp::run(HINSTANCE instance, int showCommand) {
     instance_ = instance;
+
+    INITCOMMONCONTROLSEX controls{};
+    controls.dwSize = sizeof(controls);
+    controls.dwICC = ICC_LISTVIEW_CLASSES;
+    InitCommonControlsEx(&controls);
+
+    // RichEdit 用于日志着色；若系统缺少该组件则退回普通 EDIT（不影响功能）
+    richEdit_ = LoadLibraryW(L"Msftedit.dll") != nullptr;
 
     HDC screen = GetDC(nullptr);
     dpi_ = GetDeviceCaps(screen, LOGPIXELSX);
@@ -123,10 +158,8 @@ int GuiApp::run(HINSTANCE instance, int showCommand) {
 
     const int windowWidth = frame.right - frame.left;
     const int windowHeight = frame.bottom - frame.top;
-    const int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-    const int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    const int x = (screenWidth - windowWidth) / 2;
-    const int y = (screenHeight - windowHeight) / 2;
+    const int x = (GetSystemMetrics(SM_CXSCREEN) - windowWidth) / 2;
+    const int y = (GetSystemMetrics(SM_CYSCREEN) - windowHeight) / 2;
 
     window_ = CreateWindowExW(0, kClassName, L"ROS 模拟节点系统 · 节点通信模拟平台",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
@@ -172,43 +205,38 @@ LRESULT GuiApp::windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpar
             Logger::setSink([this](const std::string& line) { appendLog(line); });
             refreshNodeList();
             refreshTopics();
+            refreshMessageList();
             refreshStatus();
-            Logger::info("GUI", "界面已就绪。可从左侧创建节点，或在右侧发布消息。");
+            Logger::info("GUI", "界面已就绪。左侧创建节点，中间发布消息，双击消息记录可重发。");
             return 0;
 
         case WM_COMMAND: {
             const int id = LOWORD(wparam);
             const int code = HIWORD(wparam);
-            if (id == kIdCreateNode && code == BN_CLICKED) {
-                onCreateNode();
-                return 0;
-            }
-            if (id == kIdRemoveNode && code == BN_CLICKED) {
-                onRemoveNode();
-                return 0;
-            }
-            if (id == kIdShutdownAll && code == BN_CLICKED) {
-                onShutdownAll();
-                return 0;
-            }
-            if (id == kIdPublishButton && code == BN_CLICKED) {
-                onPublish();
-                return 0;
-            }
-            if (id == kIdRandomButton && code == BN_CLICKED) {
-                onRandomPublish();
-                return 0;
-            }
-            if (id == kIdDemoButton && code == BN_CLICKED) {
-                onRunDemo();
-                return 0;
-            }
-            if (id == kIdLabButton && code == BN_CLICKED) {
-                onExceptionLab();
-                return 0;
+            if (code == BN_CLICKED) {
+                switch (id) {
+                    case kIdCreateNode: onCreateNode(); return 0;
+                    case kIdRemoveNode: onRemoveNode(); return 0;
+                    case kIdShutdownAll: onShutdownAll(); return 0;
+                    case kIdPublishButton: onPublish(); return 0;
+                    case kIdRandomButton: onRandomPublish(); return 0;
+                    case kIdDemoButton: onRunDemo(); return 0;
+                    case kIdLabButton: onExceptionLab(); return 0;
+                    case kIdExportButton: onExportCsv(); return 0;
+                    default: break;
+                }
             }
             if (id == kIdLogLevel && code == CBN_SELCHANGE) {
                 onLogLevelChanged();
+                return 0;
+            }
+            break;
+        }
+
+        case WM_NOTIFY: {
+            const auto* header = reinterpret_cast<const NMHDR*>(lparam);
+            if (header->idFrom == kIdMessageList && header->code == NM_DBLCLK) {
+                onResendSelected();
                 return 0;
             }
             break;
@@ -261,15 +289,22 @@ HWND GuiApp::createChild(const wchar_t* className, const wchar_t* text, DWORD st
 }
 
 void GuiApp::createControls() {
-    // 左侧：节点列表
-    createChild(L"BUTTON", L" 节点列表", BS_GROUPBOX, 0, 16, 82, 300, 350, 0);
-    nodeList_ = createChild(L"LISTBOX", L"", WS_VSCROLL | WS_BORDER | LBS_NOTIFY |
-                                                  LBS_NOINTEGRALHEIGHT,
-                            0, 30, 106, 272, 262, kIdNodeList);
-    createChild(L"BUTTON", L"移除选中节点", BS_PUSHBUTTON, 0, 30, 386, 130, 28, kIdRemoveNode);
-    createChild(L"BUTTON", L"关闭全部", BS_PUSHBUTTON, 0, 172, 386, 130, 28, kIdShutdownAll);
+    // ---- 左侧：节点列表（ListView 报表模式） ----
+    createChild(L"BUTTON", L" 节点列表", BS_GROUPBOX, 0, 16, 82, 300, 300, 0);
+    nodeList_ = createChild(L"SysListView32", L"",
+                            WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                            WS_EX_CLIENTEDGE, 30, 106, 272, 240, kIdNodeList);
+    ListView_SetExtendedListViewStyle(nodeList_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES |
+                                                    LVS_EX_DOUBLEBUFFER);
+    addColumn(nodeList_, 0, L"名称", scale(94));
+    addColumn(nodeList_, 1, L"类型", scale(54));
+    addColumn(nodeList_, 2, L"话题", scale(76));
+    addColumn(nodeList_, 3, L"收到", scale(38));
 
-    // 右上：新建节点
+    createChild(L"BUTTON", L"移除选中节点", BS_PUSHBUTTON, 0, 30, 352, 130, 28, kIdRemoveNode);
+    createChild(L"BUTTON", L"关闭全部", BS_PUSHBUTTON, 0, 172, 352, 130, 28, kIdShutdownAll);
+
+    // ---- 右上：新建节点 ----
     createChild(L"BUTTON", L" 新建节点", BS_GROUPBOX, 0, 332, 82, 652, 116, 0);
     createChild(L"STATIC", L"名称", SS_LEFT, 0, 348, 102, 44, 22, 0);
     createChild(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE,
@@ -283,7 +318,7 @@ void GuiApp::createControls() {
     SendMessageW(radioPublisher, BM_SETCHECK, BST_CHECKED, 0);
     createChild(L"BUTTON", L"创建节点", BS_PUSHBUTTON, 0, 610, 138, 150, 30, kIdCreateNode);
 
-    // 右中：发布消息
+    // ---- 右中：发布消息 ----
     createChild(L"BUTTON", L" 发布消息", BS_GROUPBOX, 0, 332, 206, 652, 96, 0);
     createChild(L"STATIC", L"话题", SS_LEFT, 0, 348, 228, 44, 22, 0);
     topicsCombo_ = createChild(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
@@ -294,47 +329,65 @@ void GuiApp::createControls() {
     createChild(L"BUTTON", L"发布", BS_PUSHBUTTON, 0, 808, 222, 80, 30, kIdPublishButton);
     createChild(L"BUTTON", L"随机一条", BS_PUSHBUTTON, 0, 896, 222, 80, 30, kIdRandomButton);
 
-    // 右下：演示与工具
+    // ---- 右下：演示与工具 ----
     createChild(L"BUTTON", L" 演示与工具", BS_GROUPBOX, 0, 332, 310, 652, 92, 0);
     createChild(L"BUTTON", L"运行内置演示", BS_PUSHBUTTON, 0, 348, 330, 130, 30, kIdDemoButton);
-    createChild(L"BUTTON", L"异常实验室", BS_PUSHBUTTON, 0, 490, 330, 120, 30, kIdLabButton);
-    createChild(L"STATIC", L"日志级别", SS_LEFT, 0, 626, 336, 66, 22, 0);
+    createChild(L"BUTTON", L"异常实验室", BS_PUSHBUTTON, 0, 486, 330, 120, 30, kIdLabButton);
+    createChild(L"BUTTON", L"导出 CSV", BS_PUSHBUTTON, 0, 614, 330, 96, 30, kIdExportButton);
+    createChild(L"STATIC", L"日志级别", SS_LEFT, 0, 722, 336, 66, 22, 0);
     logLevelCombo_ = createChild(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                 0, 694, 330, 110, 160, kIdLogLevel);
+                                 0, 790, 330, 110, 160, kIdLogLevel);
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"INFO"));
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"WARN"));
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"ERROR"));
     SendMessageW(logLevelCombo_, CB_SETCURSEL, 0, 0);
-    createChild(L"STATIC", L"提示：异常实验室会依次触发 6 种非法操作，全部被捕获后回到正常状态。",
-                SS_LEFT, 0, 348, 370, 620, 22, 0);
+    createChild(L"STATIC", L"提示：双击“消息记录”中的任意一行，可原样重发该条消息。", SS_LEFT,
+                0, 348, 370, 620, 22, 0);
 
-    // 底部：日志区
-    createChild(L"BUTTON", L" 运行日志", BS_GROUPBOX, 0, 16, 440, 968, 212, 0);
-    logEdit_ = createChild(L"EDIT", L"",
+    // ---- 消息记录 ----
+    createChild(L"BUTTON", L" 消息记录（双击某行可重发）", BS_GROUPBOX, 0, 16, 410, 968, 200, 0);
+    messageList_ = createChild(L"SysListView32", L"",
+                               WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                               WS_EX_CLIENTEDGE, 30, 434, 940, 166, kIdMessageList);
+    ListView_SetExtendedListViewStyle(messageList_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES |
+                                                       LVS_EX_DOUBLEBUFFER);
+    addColumn(messageList_, 0, L"#", scale(40));
+    addColumn(messageList_, 1, L"时间", scale(162));
+    addColumn(messageList_, 2, L"话题", scale(90));
+    addColumn(messageList_, 3, L"内容", scale(458));
+    addColumn(messageList_, 4, L"发布者", scale(120));
+    addColumn(messageList_, 5, L"送达", scale(60));
+
+    // ---- 运行日志 ----
+    createChild(L"BUTTON", L" 运行日志", BS_GROUPBOX, 0, 16, 610, 968, 206, 0);
+    logEdit_ = createChild(richEdit_ ? L"RICHEDIT50W" : L"EDIT", L"",
                            WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-                           WS_EX_CLIENTEDGE, 30, 464, 940, 172, kIdLogEdit);
+                           WS_EX_CLIENTEDGE, 30, 634, 940, 166, kIdLogEdit);
+    if (richEdit_) {
+        SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, static_cast<LPARAM>(200000));
+    }
 }
 
 void GuiApp::applyFonts() {
     uiFont_ = CreateFontW(-MulDiv(9, dpi_, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                          CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                          L"Microsoft YaHei UI");
+                          CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
     monoFont_ = CreateFontW(-MulDiv(10, dpi_, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                             CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
     titleFont_ = CreateFontW(-MulDiv(22, dpi_, 72), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                             L"Microsoft YaHei UI");
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
 
     EnumChildWindows(window_, &applyFontProc, reinterpret_cast<LPARAM>(uiFont_));
-    // 日志区与节点列表用等宽字体：中文宽 2 列、英文宽 1 列，列才能对齐
     if (logEdit_ != nullptr) {
         SendMessageW(logEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(monoFont_), TRUE);
     }
     if (nodeList_ != nullptr) {
         SendMessageW(nodeList_, WM_SETFONT, reinterpret_cast<WPARAM>(monoFont_), TRUE);
+    }
+    if (messageList_ != nullptr) {
+        SendMessageW(messageList_, WM_SETFONT, reinterpret_cast<WPARAM>(monoFont_), TRUE);
     }
 }
 
@@ -342,7 +395,6 @@ void GuiApp::paint(HDC dc) {
     RECT client{};
     GetClientRect(window_, &client);
 
-    // 顶部标题条
     RECT header{0, 0, client.right, scale(66)};
     HBRUSH headerBrush = CreateSolidBrush(kHeaderColor);
     FillRect(dc, &header, headerBrush);
@@ -356,10 +408,9 @@ void GuiApp::paint(HDC dc) {
 
     SelectObject(dc, uiFont_);
     RECT subtitleRect{scale(24), scale(42), client.right - scale(24), scale(62)};
-    DrawTextW(dc, L"节点 · 话题 · 发布/订阅通信模拟平台      C++17 / Win32", -1, &subtitleRect,
-              DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    DrawTextW(dc, L"节点 · 话题 · 发布/订阅通信模拟平台      C++17 / Win32 / 零第三方依赖", -1,
+              &subtitleRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    // 底部状态条
     RECT status{0, client.bottom - scale(34), client.right, client.bottom};
     FillRect(dc, &status, headerBrush);
     DeleteObject(headerBrush);
@@ -377,11 +428,30 @@ void GuiApp::refreshNodeList() {
     if (nodeList_ == nullptr) {
         return;
     }
-    SendMessageW(nodeList_, LB_RESETCONTENT, 0, 0);
+    ListView_DeleteAllItems(nodeList_);
+    int row = 0;
     for (const auto& managed : nodes_) {
-        const std::wstring line = utf8ToWide(managed.node->name() + "    [" + managed.kind +
-                                             "]    话题=" + managed.topic);
-        SendMessageW(nodeList_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(line.c_str()));
+        const std::wstring name = utf8ToWide(managed.node->name());
+        const std::wstring kind = utf8ToWide(managed.kind);
+        const std::wstring topic = utf8ToWide(managed.topic);
+
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = row;
+        item.pszText = const_cast<wchar_t*>(name.c_str());
+        const int inserted = ListView_InsertItem(nodeList_, &item);
+        setItemText(nodeList_, inserted, 1, kind);
+        setItemText(nodeList_, inserted, 2, topic);
+
+        std::wstring received = L"-";
+        if (managed.kind == "订阅者") {
+            const auto* subscriber = dynamic_cast<const Subscriber*>(managed.node.get());
+            if (subscriber != nullptr) {
+                received = std::to_wstring(subscriber->receivedCount());
+            }
+        }
+        setItemText(nodeList_, inserted, 3, received);
+        ++row;
     }
 }
 
@@ -390,7 +460,6 @@ void GuiApp::refreshTopics() {
         return;
     }
     const std::string previous = textOf(topicsCombo_);
-
     SendMessageW(topicsCombo_, CB_RESETCONTENT, 0, 0);
 
     std::vector<std::string> topics;
@@ -413,6 +482,33 @@ void GuiApp::refreshTopics() {
     SendMessageW(topicsCombo_, CB_SETCURSEL, index, 0);
 }
 
+void GuiApp::refreshMessageList() {
+    if (messageList_ == nullptr) {
+        return;
+    }
+    ListView_DeleteAllItems(messageList_);
+
+    int row = 0;
+    for (int i = static_cast<int>(messages_.size()) - 1; i >= 0; --i) {
+        const MessageRecord& record = messages_[static_cast<std::size_t>(i)];
+
+        const std::wstring indexText = std::to_wstring(record.index);
+        LVITEMW item{};
+        item.mask = LVIF_TEXT | LVIF_PARAM;
+        item.iItem = row;
+        item.pszText = const_cast<wchar_t*>(indexText.c_str());
+        item.lParam = static_cast<LPARAM>(i);
+        const int inserted = ListView_InsertItem(messageList_, &item);
+
+        setItemText(messageList_, inserted, 1, utf8ToWide(record.time));
+        setItemText(messageList_, inserted, 2, utf8ToWide(record.topic));
+        setItemText(messageList_, inserted, 3, utf8ToWide(record.content));
+        setItemText(messageList_, inserted, 4, utf8ToWide(record.publisher));
+        setItemText(messageList_, inserted, 5, std::to_wstring(record.delivered) + L" 人");
+        ++row;
+    }
+}
+
 void GuiApp::refreshStatus() {
     const std::size_t topicCount = ROS::instance().topics().size();
     static const wchar_t* const kLevelNames[] = {L"INFO", L"WARN", L"ERROR"};
@@ -421,8 +517,9 @@ void GuiApp::refreshStatus() {
         (levelIndex >= 0 && levelIndex <= 2) ? kLevelNames[levelIndex] : L"INFO";
 
     wchar_t buffer[256];
-    std::swprintf(buffer, 256, L"节点 %d 个  ·  话题 %d 个  ·  日志级别 %s",
-                  static_cast<int>(nodes_.size()), static_cast<int>(topicCount), levelName);
+    std::swprintf(buffer, 256, L"节点 %d 个   ·   话题 %d 个   ·   消息 %d 条   ·   日志级别 %s",
+                  static_cast<int>(nodes_.size()), static_cast<int>(topicCount),
+                  static_cast<int>(messages_.size()), levelName);
     statusText_ = buffer;
 
     RECT client{};
@@ -435,11 +532,52 @@ void GuiApp::appendLog(const std::string& utf8Line) {
     if (logEdit_ == nullptr || !IsWindow(logEdit_)) {
         return;
     }
-    const std::wstring text = utf8ToWide(utf8Line) + L"\r\n";
+
+    COLORREF color = kPlainColor;
+    if (utf8Line.rfind("[ERROR]", 0) == 0) {
+        color = kErrorColor;
+    } else if (utf8Line.rfind("[WARN ]", 0) == 0) {
+        color = kWarnColor;
+    } else if (utf8Line.rfind("[INFO ]", 0) == 0) {
+        color = kInfoColor;
+    }
+
     const int length = GetWindowTextLengthW(logEdit_);
     SendMessageW(logEdit_, EM_SETSEL, static_cast<WPARAM>(length), static_cast<LPARAM>(length));
+
+    if (richEdit_) {
+        CHARFORMAT2W format{};
+        format.cbSize = sizeof(format);
+        format.dwMask = CFM_COLOR;
+        format.crTextColor = color;
+        SendMessageW(logEdit_, EM_SETCHARFORMAT, SCF_SELECTION,
+                     reinterpret_cast<LPARAM>(&format));
+    }
+
+    const std::wstring text = utf8ToWide(utf8Line) + L"\r\n";
     SendMessageW(logEdit_, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(text.c_str()));
     SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
+}
+
+void GuiApp::recordMessage(const std::string& topic, const std::string& content,
+                           const std::string& publisher, std::size_t delivered) {
+    MessageRecord record;
+    record.index = ++messageSeq_;
+    record.time = nowTimestamp();
+    record.topic = topic;
+    record.content = content;
+    record.publisher = publisher;
+    record.delivered = delivered;
+    messages_.push_back(std::move(record));
+
+    // 只保留最近 500 条，避免长时间运行后占用过多内存
+    constexpr std::size_t kMaxRecords = 500;
+    if (messages_.size() > kMaxRecords) {
+        messages_.erase(messages_.begin(), messages_.begin() +
+                                               static_cast<std::ptrdiff_t>(messages_.size() -
+                                                                           kMaxRecords));
+    }
+    refreshMessageList();
 }
 
 // ---------------------------------------------------------------- 控件读写
@@ -448,31 +586,43 @@ HWND GuiApp::control(int id) const {
     return GetDlgItem(window_, id);
 }
 
-std::string GuiApp::textOf(HWND parent) const {
-    if (parent == nullptr) {
+std::string GuiApp::textOf(HWND handle) const {
+    if (handle == nullptr) {
         return std::string();
     }
-    const int length = GetWindowTextLengthW(parent);
+    const int length = GetWindowTextLengthW(handle);
     if (length <= 0) {
         return std::string();
     }
     std::wstring buffer(static_cast<std::size_t>(length) + 1, L'\0');
-    GetWindowTextW(parent, buffer.data(), length + 1);
+    GetWindowTextW(handle, buffer.data(), length + 1);
     buffer.resize(static_cast<std::size_t>(length));
     return trim(wideToUtf8(buffer));
 }
 
-void GuiApp::setText(HWND target, const std::string& utf8Text) const {
-    if (target == nullptr) {
+void GuiApp::setText(HWND handle, const std::string& utf8Text) const {
+    if (handle == nullptr) {
         return;
     }
-    SetWindowTextW(target, utf8ToWide(utf8Text).c_str());
+    SetWindowTextW(handle, utf8ToWide(utf8Text).c_str());
+}
+
+void GuiApp::selectTopic(const std::string& topic) {
+    if (topicsCombo_ == nullptr) {
+        return;
+    }
+    const std::wstring wide = utf8ToWide(topic);
+    const LRESULT index = SendMessageW(topicsCombo_, CB_FINDSTRINGEXACT,
+                                       static_cast<WPARAM>(-1),
+                                       reinterpret_cast<LPARAM>(wide.c_str()));
+    if (index >= 0) {
+        SendMessageW(topicsCombo_, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+    }
 }
 
 // ---------------------------------------------------------------- 交互动作
 
 void GuiApp::onCreateNode() {
-
     const std::string name = textOf(control(kIdNameEdit));
     const std::string topic = textOf(control(kIdTopicEdit));
 
@@ -512,8 +662,8 @@ void GuiApp::onRemoveNode() {
         Logger::warn("GUI", "当前没有可移除的节点");
         return;
     }
-    const int index = static_cast<int>(SendMessageW(nodeList_, LB_GETCURSEL, 0, 0));
-    if (index == LB_ERR || index < 0 || index >= static_cast<int>(nodes_.size())) {
+    const int index = ListView_GetNextItem(nodeList_, -1, LVNI_SELECTED);
+    if (index < 0 || index >= static_cast<int>(nodes_.size())) {
         Logger::warn("GUI", "请先在左侧列表中选择要移除的节点");
         return;
     }
@@ -566,8 +716,12 @@ void GuiApp::onPublish() {
         return;
     }
 
+    const std::size_t delivered = ROS::instance().subscriberCount(topic);
     try {
         publisher->publish(content);
+        recordMessage(topic, content, publisher->name(), delivered);
+        refreshNodeList();   // 更新订阅者的“收到”计数
+        refreshStatus();
     } catch (const RosException& error) {
         Logger::error("GUI", error.what());
         Logger::info("GUI", "提示：该话题还没有订阅者，先创建一个订阅者再发布。");
@@ -582,14 +736,39 @@ void GuiApp::onRandomPublish() {
     onPublish();
 }
 
+void GuiApp::onResendSelected() {
+    if (messageList_ == nullptr) {
+        return;
+    }
+    const int row = ListView_GetNextItem(messageList_, -1, LVNI_SELECTED);
+    if (row < 0) {
+        Logger::warn("GUI", "请先在消息记录中选中一行");
+        return;
+    }
+
+    LVITEMW item{};
+    item.mask = LVIF_PARAM;
+    item.iItem = row;
+    if (!ListView_GetItem(messageList_, &item)) {
+        return;
+    }
+    const auto index = static_cast<std::size_t>(item.lParam);
+    if (index >= messages_.size()) {
+        return;
+    }
+
+    const MessageRecord record = messages_[index];
+    selectTopic(record.topic);
+    setText(control(kIdPublishContent), record.content);
+    Logger::info("GUI", "重发消息：" + record.content + "（话题=" + record.topic + "）");
+    onPublish();
+}
+
 void GuiApp::onRunDemo() {
     if (!nodes_.empty()) {
         Logger::warn("GUI", "内置演示会先关闭并清空当前节点");
         ROS::instance().shutdownAll();
         nodes_.clear();
-        refreshNodeList();
-        refreshTopics();
-        refreshStatus();
     }
 
     Logger::info("演示", "===== 场景一：2 个发布者 + 2 个订阅者，同一话题多对多通信 =====");
@@ -606,9 +785,16 @@ void GuiApp::onRunDemo() {
         subB.init();
         subCmd.init();
 
+        const std::size_t delivered = ROS::instance().subscriberCount("sensor");
+
         pubTemp.publish("temperature=25.3");
+        recordMessage("sensor", "temperature=25.3", "demo_pub_temp", delivered);
+
         pubHumi.publish("humidity=48%");
+        recordMessage("sensor", "humidity=48%", "demo_pub_humi", delivered);
+
         pubTemp.publish("temperature=26.1");
+        recordMessage("sensor", "temperature=26.1", "demo_pub_temp", delivered);
 
         Logger::info("演示", "统计：sub_a=" + std::to_string(subA.receivedCount()) +
                                  " 条，sub_b=" + std::to_string(subB.receivedCount()) +
@@ -617,16 +803,16 @@ void GuiApp::onRunDemo() {
 
         ROS::instance().shutdownAll();
     }
-    Logger::info("演示", "===== 内置演示结束 =====");
+    Logger::info("演示", "===== 内置演示结束，可在“消息记录”里双击任意一行重发 =====");
     refreshNodeList();
     refreshTopics();
+    refreshMessageList();
     refreshStatus();
 }
 
 void GuiApp::onExceptionLab() {
     Logger::info("实验", "===== 异常实验室：逐个触发非法操作，观察是否被捕获 =====");
 
-    // 1. 空节点名
     try {
         const Publisher bad("", "sensor");
         (void)bad;
@@ -634,7 +820,6 @@ void GuiApp::onExceptionLab() {
         Logger::error("实验", std::string("已捕获 ") + error.what());
     }
 
-    // 2. 空话题名
     try {
         const Publisher bad("lab_bad_topic", "   ");
         (void)bad;
@@ -642,7 +827,6 @@ void GuiApp::onExceptionLab() {
         Logger::error("实验", std::string("已捕获 ") + error.what());
     }
 
-    // 3. 重复节点名注册
     try {
         Publisher first("lab_dup", "sensor");
         Publisher second("lab_dup", "sensor");
@@ -652,7 +836,6 @@ void GuiApp::onExceptionLab() {
         Logger::error("实验", std::string("已捕获 ") + error.what());
     }
 
-    // 4. 空消息内容
     try {
         Publisher publisher("lab_empty_pub", "sensor");
         Subscriber subscriber("lab_empty_sub", "sensor");
@@ -663,7 +846,6 @@ void GuiApp::onExceptionLab() {
         Logger::error("实验", std::string("已捕获 ") + error.what());
     }
 
-    // 5. 向不存在的话题发布
     try {
         Publisher publisher("lab_ghost_pub", "ghost_topic");
         publisher.init();
@@ -672,7 +854,6 @@ void GuiApp::onExceptionLab() {
         Logger::error("实验", std::string("已捕获 ") + error.what());
     }
 
-    // 6. 关闭后继续通信
     try {
         Publisher publisher("lab_closed_pub", "sensor");
         Subscriber subscriber("lab_closed_sub", "sensor");
@@ -702,6 +883,31 @@ void GuiApp::onLogLevelChanged() {
     Logger::setMinLevel(level);
     refreshStatus();
     Logger::info("GUI", "日志级别已切换");
+}
+
+void GuiApp::onExportCsv() {
+    if (messages_.empty()) {
+        Logger::warn("GUI", "还没有消息可导出，先发布一条试试");
+        return;
+    }
+
+    std::ofstream out("messages.csv", std::ios::out | std::ios::binary);
+    if (!out.is_open()) {
+        Logger::error("GUI", "无法创建 messages.csv（工作目录可能不可写）");
+        return;
+    }
+
+    // UTF-8 BOM：保证 Excel 打开中文不乱码
+    out << "\xEF\xBB\xBF";
+    out << "序号,时间,话题,内容,发布者,送达人数\r\n";
+    for (const auto& record : messages_) {
+        out << record.index << ',' << record.time << ',' << record.topic << ','
+            << record.content << ',' << record.publisher << ',' << record.delivered << "\r\n";
+    }
+    out.close();
+
+    Logger::info("GUI", "已导出 " + std::to_string(messages_.size()) +
+                            " 条消息到 messages.csv（UTF-8，可直接用 Excel 打开）");
 }
 
 } // namespace rosmini

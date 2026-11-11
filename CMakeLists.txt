@@ -11,6 +11,12 @@ else()
   add_compile_options(-Wall -Wextra)
 endif()
 
+# 界面部分直接调用 Win32 宽字符 API，统一按 Unicode 编译，
+# 这样 commctrl 的宏（ListView_SetItemText 等）都会映射到 W 版本。
+if (WIN32)
+  add_compile_definitions(UNICODE _UNICODE)
+endif()
+
 # 核心库：不包含任何 main，可被界面、演示、测试三个程序共同链接
 add_library(rosmini_core
   src/Util.cpp
