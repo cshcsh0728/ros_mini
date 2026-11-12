@@ -28,7 +28,7 @@ namespace {
 
 // ---------- 设计尺寸（96 DPI 基准，运行时按 DPI 缩放） ----------
 
-constexpr int kDesignWidth = 1000;
+constexpr int kDesignWidth = 1080;
 constexpr int kDesignHeight = 890;
 
 constexpr COLORREF kHeaderColor = RGB(30, 41, 66);
@@ -319,81 +319,81 @@ HWND GuiApp::createChild(const wchar_t* className, const wchar_t* text, DWORD st
 
 void GuiApp::createControls() {
     // ---- 左侧：节点列表（ListView 报表模式） ----
-    createChild(L"BUTTON", L" 节点列表", BS_GROUPBOX, 0, 16, 82, 300, 300, 0);
+    createChild(L"BUTTON", L" 节点列表", BS_GROUPBOX, 0, 16, 82, 380, 300, 0);
     nodeList_ = createChild(L"SysListView32", L"",
                             WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-                            WS_EX_CLIENTEDGE, 30, 106, 272, 240, kIdNodeList);
+                            WS_EX_CLIENTEDGE, 30, 106, 352, 240, kIdNodeList);
     ListView_SetExtendedListViewStyle(nodeList_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES |
                                                     LVS_EX_DOUBLEBUFFER);
-    addColumn(nodeList_, 0, L"名称", scale(94));
-    addColumn(nodeList_, 1, L"类型", scale(54));
-    addColumn(nodeList_, 2, L"话题", scale(76));
-    addColumn(nodeList_, 3, L"收到", scale(38));
+    addColumn(nodeList_, 0, L"名称", scale(120));
+    addColumn(nodeList_, 1, L"类型", scale(64));
+    addColumn(nodeList_, 2, L"话题", scale(96));
+    addColumn(nodeList_, 3, L"收到", scale(60));
 
-    createChild(L"BUTTON", L"移除选中节点", BS_PUSHBUTTON, 0, 30, 352, 130, 28, kIdRemoveNode);
-    createChild(L"BUTTON", L"关闭全部", BS_PUSHBUTTON, 0, 172, 352, 130, 28, kIdShutdownAll);
+    createChild(L"BUTTON", L"移除选中节点", BS_PUSHBUTTON, 0, 30, 352, 160, 28, kIdRemoveNode);
+    createChild(L"BUTTON", L"关闭全部", BS_PUSHBUTTON, 0, 206, 352, 160, 28, kIdShutdownAll);
 
     // ---- 右上：新建节点 ----
-    createChild(L"BUTTON", L" 新建节点", BS_GROUPBOX, 0, 332, 82, 652, 116, 0);
-    createChild(L"STATIC", L"名称", SS_LEFT, 0, 348, 102, 44, 22, 0);
+    createChild(L"BUTTON", L" 新建节点", BS_GROUPBOX, 0, 412, 82, 652, 116, 0);
+    createChild(L"STATIC", L"名称", SS_LEFT, 0, 428, 102, 44, 22, 0);
     createChild(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE,
-                396, 98, 150, 26, kIdNameEdit);
-    createChild(L"STATIC", L"话题", SS_LEFT, 0, 562, 102, 44, 22, 0);
+                476, 98, 150, 26, kIdNameEdit);
+    createChild(L"STATIC", L"话题", SS_LEFT, 0, 642, 102, 44, 22, 0);
     createChild(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE,
-                610, 98, 150, 26, kIdTopicEdit);
+                690, 98, 150, 26, kIdTopicEdit);
     HWND radioPublisher = createChild(L"BUTTON", L"发布者", BS_AUTORADIOBUTTON | WS_GROUP,
-                                      0, 347, 144, 88, 24, kIdRadioPublisher);
-    createChild(L"BUTTON", L"订阅者", BS_AUTORADIOBUTTON, 0, 445, 144, 88, 24, kIdRadioSubscriber);
+                                      0, 427, 144, 88, 24, kIdRadioPublisher);
+    createChild(L"BUTTON", L"订阅者", BS_AUTORADIOBUTTON, 0, 525, 144, 88, 24, kIdRadioSubscriber);
     SendMessageW(radioPublisher, BM_SETCHECK, BST_CHECKED, 0);
-    createChild(L"BUTTON", L"创建节点", BS_PUSHBUTTON, 0, 610, 138, 150, 30, kIdCreateNode);
+    createChild(L"BUTTON", L"创建节点", BS_PUSHBUTTON, 0, 690, 138, 150, 30, kIdCreateNode);
 
     // ---- 右中：发布消息 ----
-    createChild(L"BUTTON", L" 发布消息", BS_GROUPBOX, 0, 332, 206, 652, 96, 0);
-    createChild(L"STATIC", L"话题", SS_LEFT, 0, 348, 228, 44, 22, 0);
+    createChild(L"BUTTON", L" 发布消息", BS_GROUPBOX, 0, 412, 206, 652, 96, 0);
+    createChild(L"STATIC", L"话题", SS_LEFT, 0, 428, 228, 44, 22, 0);
     topicsCombo_ = createChild(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                               0, 396, 224, 170, 220, kIdPublishTopic);
-    createChild(L"STATIC", L"内容", SS_LEFT, 0, 582, 228, 44, 22, 0);
+                               0, 476, 224, 170, 220, kIdPublishTopic);
+    createChild(L"STATIC", L"内容", SS_LEFT, 0, 662, 228, 44, 22, 0);
     createChild(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE,
-                630, 224, 170, 26, kIdPublishContent);
-    createChild(L"BUTTON", L"发布", BS_PUSHBUTTON, 0, 808, 222, 80, 30, kIdPublishButton);
-    createChild(L"BUTTON", L"随机一条", BS_PUSHBUTTON, 0, 896, 222, 80, 30, kIdRandomButton);
+                710, 224, 170, 26, kIdPublishContent);
+    createChild(L"BUTTON", L"发布", BS_PUSHBUTTON, 0, 888, 222, 80, 30, kIdPublishButton);
+    createChild(L"BUTTON", L"随机一条", BS_PUSHBUTTON, 0, 976, 222, 80, 30, kIdRandomButton);
 
     // ---- 右下：演示与工具 ----
-    createChild(L"BUTTON", L" 演示与工具", BS_GROUPBOX, 0, 332, 310, 652, 92, 0);
+    createChild(L"BUTTON", L" 演示与工具", BS_GROUPBOX, 0, 412, 310, 652, 92, 0);
     autoDemoButton_ = createChild(L"BUTTON", L"自动演示", BS_PUSHBUTTON, 0,
-                                  348, 330, 110, 30, kIdAutoDemoButton);
-    createChild(L"BUTTON", L"内置演示", BS_PUSHBUTTON, 0, 466, 330, 100, 30, kIdDemoButton);
-    createChild(L"BUTTON", L"异常实验室", BS_PUSHBUTTON, 0, 574, 330, 110, 30, kIdLabButton);
-    createChild(L"BUTTON", L"导出 CSV", BS_PUSHBUTTON, 0, 692, 330, 90, 30, kIdExportButton);
-    createChild(L"STATIC", L"日志级别", SS_LEFT, 0, 792, 336, 58, 22, 0);
+                                  428, 330, 110, 30, kIdAutoDemoButton);
+    createChild(L"BUTTON", L"内置演示", BS_PUSHBUTTON, 0, 546, 330, 100, 30, kIdDemoButton);
+    createChild(L"BUTTON", L"异常实验室", BS_PUSHBUTTON, 0, 654, 330, 110, 30, kIdLabButton);
+    createChild(L"BUTTON", L"导出 CSV", BS_PUSHBUTTON, 0, 772, 330, 90, 30, kIdExportButton);
+    createChild(L"STATIC", L"日志级别", SS_LEFT, 0, 872, 336, 58, 22, 0);
     logLevelCombo_ = createChild(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                 0, 852, 330, 110, 160, kIdLogLevel);
+                                 0, 932, 330, 110, 160, kIdLogLevel);
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"INFO"));
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"WARN"));
     SendMessageW(logLevelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"ERROR"));
     SendMessageW(logLevelCombo_, CB_SETCURSEL, 0, 0);
     createChild(L"STATIC", L"提示：“自动演示”会依次创建 5 个节点、发布 3 条消息并触发 6 种异常；双击消息记录可重发。",
-                SS_LEFT, 0, 348, 370, 620, 22, 0);
+                SS_LEFT, 0, 428, 370, 620, 22, 0);
 
     // ---- 消息记录 ----
-    createChild(L"BUTTON", L" 消息记录（双击某行可重发）", BS_GROUPBOX, 0, 16, 410, 968, 200, 0);
+    createChild(L"BUTTON", L" 消息记录（双击某行可重发）", BS_GROUPBOX, 0, 16, 410, 1048, 200, 0);
     messageList_ = createChild(L"SysListView32", L"",
                                WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-                               WS_EX_CLIENTEDGE, 30, 434, 940, 166, kIdMessageList);
+                               WS_EX_CLIENTEDGE, 30, 434, 1020, 166, kIdMessageList);
     ListView_SetExtendedListViewStyle(messageList_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES |
                                                        LVS_EX_DOUBLEBUFFER);
     addColumn(messageList_, 0, L"#", scale(40));
     addColumn(messageList_, 1, L"时间", scale(162));
     addColumn(messageList_, 2, L"话题", scale(90));
-    addColumn(messageList_, 3, L"内容", scale(458));
+    addColumn(messageList_, 3, L"内容", scale(538));
     addColumn(messageList_, 4, L"发布者", scale(120));
     addColumn(messageList_, 5, L"送达", scale(60));
 
     // ---- 运行日志 ----
-    createChild(L"BUTTON", L" 运行日志", BS_GROUPBOX, 0, 16, 610, 968, 206, 0);
+    createChild(L"BUTTON", L" 运行日志", BS_GROUPBOX, 0, 16, 610, 1048, 206, 0);
     logEdit_ = createChild(richEdit_ ? L"RICHEDIT50W" : L"EDIT", L"",
                            WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-                           WS_EX_CLIENTEDGE, 30, 634, 940, 166, kIdLogEdit);
+                           WS_EX_CLIENTEDGE, 30, 634, 1020, 166, kIdLogEdit);
     if (richEdit_) {
         SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, static_cast<LPARAM>(200000));
     }
