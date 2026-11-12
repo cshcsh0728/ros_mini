@@ -40,10 +40,10 @@ constexpr COLORREF kWarnColor = RGB(176, 102, 0);
 constexpr COLORREF kErrorColor = RGB(190, 40, 40);
 constexpr COLORREF kPlainColor = RGB(60, 60, 60);
 
-// 自动演示：每 600ms 推进一步，共 17 步（0~16）
+// 自动演示：每 600ms 推进一步，共 16 步（0~15）
 constexpr UINT_PTR kTimerAutoDemo = 1;
 constexpr UINT kAutoDemoStepMs = 600;
-constexpr int kAutoDemoSteps = 17;
+constexpr int kAutoDemoSteps = 16;
 
 enum ControlId : int {
     kIdNodeList = 101,
@@ -847,14 +847,18 @@ void GuiApp::runExceptionCase(int index) {
             });
             break;
         default:
+            // 只关闭本用例自己的节点，避免影响界面上已有的节点；
+            // 话题也用独立的 lab_topic，避免把消息投递到演示节点
             guardedCase([] {
-                Publisher publisher("lab_closed_pub", "sensor");
-                Subscriber subscriber("lab_closed_sub", "sensor");
+                Publisher publisher("lab_closed_pub", "lab_topic");
+                Subscriber subscriber("lab_closed_sub", "lab_topic");
                 publisher.init();
                 subscriber.init();
                 publisher.publish("temperature=20.0");
-                ROS::instance().shutdownAll();
-                publisher.publish("temperature=21.0");
+                publisher.shutdown();
+                ROS::instance().unregister(&publisher);
+                publisher.publish("temperature=21.0");   // 这里抛出 NodeException
+                (void)subscriber;
             });
             break;
     }
@@ -947,7 +951,7 @@ void GuiApp::startAutoDemo() {
     if (autoDemoButton_ != nullptr) {
         EnableWindow(autoDemoButton_, FALSE);
     }
-    Logger::info("自动演示", "开始：创建 5 个节点 → 发布 3 条消息 → 统一关闭 → 触发 6 种异常");
+    Logger::info("自动演示", "开始：创建 5 个节点 → 发布 3 条消息 → 触发 6 种异常（结束后节点保留，可直接操作）");
     SetTimer(window_, kTimerAutoDemo, kAutoDemoStepMs, nullptr);
 }
 
@@ -1015,20 +1019,20 @@ void GuiApp::runAutoDemoStep(int step) {
             break;
         }
         case 9:
-            Logger::info("自动演示", "统一关闭全部节点（观察 5 个节点的关闭日志）");
-            onShutdownAll();
-            break;
         case 10:
         case 11:
         case 12:
         case 13:
         case 14:
-        case 15:
-            Logger::info("自动演示", "异常用例 " + std::to_string(step - 9) + "/6");
-            runExceptionCase(step - 10);
+            Logger::info("自动演示", "异常用例 " + std::to_string(step - 8) + "/6");
+            runExceptionCase(step - 9);
             break;
         default:
-            Logger::info("自动演示", "===== 自动演示结束：3 条消息各送达 2 个订阅者，6 种异常全部被捕获 =====");
+            Logger::info("自动演示", "===== 演示结束：3 条消息各送达 2 个订阅者，6 种异常全部被捕获 =====");
+            Logger::info("自动演示", "5 个节点仍保留，可直接在右侧发布消息、或双击消息记录重发；点“关闭全部”可统一关闭");
+            refreshNodeList();
+            refreshTopics();
+            refreshStatus();
             stopAutoDemo();
             break;
     }

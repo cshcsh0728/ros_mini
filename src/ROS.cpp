@@ -1,6 +1,7 @@
 ﻿#include "rosmini/ROS.h"
 
 #include <algorithm>
+#include <iterator>
 
 #include "rosmini/Exception.h"
 #include "rosmini/Logger.h"
@@ -48,23 +49,26 @@ void ROS::unregister(Node* node) noexcept {
         return;
     }
 
-    // 把指针从两张映射表中移除。
+    // 把指针从两张映射表中移除，并顺手删掉“已经空了”的话题条目，
+    // 否则 topics() 与状态栏会残留已无人使用的话题名。
     // 注意比较的是“基类指针地址”，不能对 node 做向下转型（类型未知，行为未定义）。
-    for (auto& entry : publishers_) {
-        auto& list = entry.second;
+    for (auto it = publishers_.begin(); it != publishers_.end();) {
+        auto& list = it->second;
         list.erase(std::remove_if(list.begin(), list.end(),
                                   [node](Publisher* item) {
                                       return static_cast<Node*>(item) == node;
                                   }),
                    list.end());
+        it = list.empty() ? publishers_.erase(it) : std::next(it);
     }
-    for (auto& entry : subscribers_) {
-        auto& list = entry.second;
+    for (auto it = subscribers_.begin(); it != subscribers_.end();) {
+        auto& list = it->second;
         list.erase(std::remove_if(list.begin(), list.end(),
                                   [node](Subscriber* item) {
                                       return static_cast<Node*>(item) == node;
                                   }),
                    list.end());
+        it = list.empty() ? subscribers_.erase(it) : std::next(it);
     }
 
     nodes_.erase(std::remove(nodes_.begin(), nodes_.end(), node), nodes_.end());
